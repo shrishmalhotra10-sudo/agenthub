@@ -6,6 +6,7 @@ import { signingSecretFor } from '@/lib/crypto';
 import { manifestNeeds } from '@/lib/taskstate/schema';
 import { AppNav } from '@/components/AppNav';
 import { AgentForm } from '@/components/AgentForm';
+import { SubmitButton } from '@/components/SubmitButton';
 import { deleteAgent } from '../actions';
 
 export default async function EditAgentPage({ params }: { params: Promise<{ id: string }> }) {
@@ -70,7 +71,13 @@ export default async function EditAgentPage({ params }: { params: Promise<{ id: 
         />
 
         <form action={deleteAgent.bind(null, agent.id)} className="mt-10 border-t border-zinc-200 pt-6 dark:border-zinc-800">
-          <button className="text-sm text-red-600 hover:underline">Delete this agent</button>
+          <SubmitButton
+            pendingText="Deleting…"
+            confirmText="Delete this agent? It disappears from the marketplace and from users' agent pickers."
+            className="text-sm text-red-600 hover:underline"
+          >
+            Delete this agent
+          </SubmitButton>
         </form>
       </main>
     </div>

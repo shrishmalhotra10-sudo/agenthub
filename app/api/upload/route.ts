@@ -99,6 +99,7 @@ export async function POST(req: Request) {
         patch: {},
         by: 'user',
         source: 'user',
+        summary: `You uploaded "${name.slice(0, 80)}"`,
         mutate: (state) => ({
           ...state,
           artifacts: [

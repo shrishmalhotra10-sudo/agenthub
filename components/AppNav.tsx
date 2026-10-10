@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { signOut } from '@/app/chat/actions';
 
 /** Top bar for the marketplace and creator pages. */
 export function AppNav({ signedIn }: { signedIn: boolean }) {
@@ -11,6 +12,11 @@ export function AppNav({ signedIn }: { signedIn: boolean }) {
           {signedIn && <Link href="/chat" className="hover:text-zinc-900 dark:hover:text-white">My chats</Link>}
           {signedIn && <Link href="/creator" className="hover:text-zinc-900 dark:hover:text-white">Creator</Link>}
         </nav>
+        {signedIn && (
+          <form action={signOut}>
+            <button className="text-zinc-500 hover:text-zinc-900 dark:hover:text-white">Sign out</button>
+          </form>
+        )}
         {!signedIn && (
           <Link href="/login" className="rounded-lg bg-zinc-900 px-3 py-1.5 font-medium text-white dark:bg-white dark:text-zinc-900">
             Sign in

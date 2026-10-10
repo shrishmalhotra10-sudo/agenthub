@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getUser } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { PROVIDER_LABEL } from '@/lib/chat/types';
 import { AppNav } from '@/components/AppNav';
 
@@ -15,6 +16,17 @@ export default async function CreatorPage() {
     .select('id, slug, name, kind, provider, model, is_published, updated_at')
     .eq('creator_id', user.id)
     .order('updated_at', { ascending: false });
+
+  // Which of my agents have an API key saved (ids only; keys are never read here).
+  let withKey = new Set<string>();
+  if (agents?.length) {
+    try {
+      const { data } = await createAdminClient().from('agent_secrets').select('agent_id').in('agent_id', agents.map((a) => a.id));
+      withKey = new Set((data ?? []).map((r) => r.agent_id));
+    } catch {
+      // Secret key not configured.
+    }
+  }
 
   return (
     <div className="min-h-dvh bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
@@ -38,6 +50,9 @@ export default async function CreatorPage() {
                 <p className="text-xs text-zinc-500">
                   {a.kind === 'external' ? 'Your own server' : `${PROVIDER_LABEL[a.provider ?? ''] ?? a.provider} · ${a.model}`} ·{' '}
                   {a.is_published ? <span className="text-emerald-600">Published</span> : 'Draft'}
+                  {a.kind === 'nocode' && !withKey.has(a.id) && (
+                    <span className="text-amber-600"> · No API key — replies in demo mode</span>
+                  )}
                 </p>
               </div>
               <div className="flex shrink-0 gap-3 text-sm">

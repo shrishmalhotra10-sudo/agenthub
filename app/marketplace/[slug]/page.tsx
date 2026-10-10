@@ -5,6 +5,7 @@ import { PROVIDER_LABEL } from '@/lib/chat/types';
 import { FIELD_LABEL, manifestNeeds } from '@/lib/taskstate/schema';
 import { startChatWith } from '@/app/chat/actions';
 import { AppNav } from '@/components/AppNav';
+import { SubmitButton } from '@/components/SubmitButton';
 
 export default async function AgentPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -48,9 +49,9 @@ export default async function AgentPage({ params }: { params: Promise<{ slug: st
         <div className="mt-8">
           {user ? (
             <form action={startChatWith.bind(null, agent.id)}>
-              <button className="rounded-lg bg-zinc-900 px-5 py-2.5 font-medium text-white dark:bg-white dark:text-zinc-900">
+              <SubmitButton pendingText="Starting chat…" className="rounded-lg bg-zinc-900 px-5 py-2.5 font-medium text-white dark:bg-white dark:text-zinc-900">
                 Start a chat with {agent.name}
-              </button>
+              </SubmitButton>
             </form>
           ) : (
             <Link href="/login" className="rounded-lg bg-zinc-900 px-5 py-2.5 font-medium text-white dark:bg-white dark:text-zinc-900">

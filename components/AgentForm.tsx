@@ -3,7 +3,7 @@
 import { useActionState, useState } from 'react';
 import { saveAgent, type SaveState } from '@/app/creator/actions';
 import { CATEGORIES } from '@/lib/chat/types';
-import { FIELD_LABEL, SHAREABLE_FIELDS, type ShareableField } from '@/lib/taskstate/schema';
+import { FIELD_LABEL, SHAREABLE_FIELDS, type ShareableField } from '@/lib/taskstate/fields';
 
 export type AgentFormValues = {
   id?: string;
@@ -27,8 +27,14 @@ const MODEL_HINT: Record<string, string> = {
   google: 'e.g. gemini-flash-latest',
 };
 
-export function AgentForm({ initial }: { initial: AgentFormValues }) {
+export function AgentForm({ initial: saved }: { initial: AgentFormValues }) {
   const [state, action, pending] = useActionState<SaveState, FormData>(saveAgent, {});
+  // After a failed save, re-fill the form with what the user typed (React resets forms on submit).
+  const initial = state.values ? ({ ...saved, ...state.values } as AgentFormValues) : saved;
+  return <AgentFormFields key={state.attempt ?? 0} initial={initial} action={action} pending={pending} error={state.error} />;
+}
+
+function AgentFormFields({ initial, action, pending, error }: { initial: AgentFormValues; action: (fd: FormData) => void; pending: boolean; error?: string }) {
   const [kind, setKind] = useState(initial.kind);
   const [provider, setProvider] = useState(initial.provider || 'openai');
 
@@ -39,7 +45,7 @@ export function AgentForm({ initial }: { initial: AgentFormValues }) {
       <div className="grid gap-4 sm:grid-cols-2">
         <Label text="Name"><input name="name" required maxLength={60} defaultValue={initial.name} className={input} /></Label>
         <Label text="Web address (marketplace/…)">
-          <input name="slug" required pattern="[a-z0-9-]{3,48}" defaultValue={initial.slug} placeholder="my-agent" className={input} />
+          <input name="slug" required pattern="[a-z0-9\-]{3,48}" defaultValue={initial.slug} placeholder="my-agent" className={input} />
         </Label>
       </div>
       <Label text="Description"><textarea name="description" rows={2} maxLength={500} defaultValue={initial.description} className={input} /></Label>
@@ -106,7 +112,7 @@ export function AgentForm({ initial }: { initial: AgentFormValues }) {
         <input type="checkbox" name="is_published" defaultChecked={initial.is_published} /> Publish to the marketplace
       </label>
 
-      {state.error && <p className="text-sm text-red-600" role="alert">{state.error}</p>}
+      {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
       <button disabled={pending} className="rounded-lg bg-zinc-900 px-5 py-2 font-medium text-white disabled:opacity-50 dark:bg-white dark:text-zinc-900">
         {pending ? 'Saving…' : 'Save agent'}
       </button>

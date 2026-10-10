@@ -4,6 +4,7 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Markdown } from './Markdown';
 import { HandoffDialog } from './HandoffDialog';
 import { TaskPanel, type PanelData } from './TaskPanel';
@@ -16,6 +17,7 @@ const ACCEPT =
   '.pdf,.docx,.png,.jpg,.jpeg,.gif,.webp,.txt,.md,.csv,.json,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.rb,.go,.rs,.java,.kt,.swift,.c,.h,.cpp,.cs,.php,.sh,.sql';
 const MAX_ATTACHMENTS = 5;
 const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_MESSAGE_CHARS = 20_000;
 
 export function ChatView(props: {
   conversationId: string;
@@ -33,7 +35,8 @@ export function ChatView(props: {
   const [uploading, setUploading] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
-  const [showPanel, setShowPanel] = useState(true);
+  const [showPanel, setShowPanel] = useState(true); // desktop: side column
+  const [panelSheet, setPanelSheet] = useState(false); // phone/tablet: full-screen sheet
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -124,30 +127,54 @@ export function ChatView(props: {
     else setAgentId(id);
   }
 
-  function onHandedOff(id: string) {
+  function onHandedOff(id: string, nextStep: string) {
     const target = agentsById.get(id);
     setHandoffTarget(null);
     setAgentId(id);
     router.refresh();
+    const next = nextStep.trim();
     sendMessage(
-      { text: `Handing off to ${target?.name ?? 'the next agent'}. Please confirm what you're picking up and continue.` },
+      { text: `Handing off to ${target?.name ?? 'the next agent'}.${next ? ` Next: ${next}` : ' Please continue from the brief.'}` },
       { body: { agentId: id } },
     );
   }
+
+  function toggleBrief() {
+    if (window.matchMedia('(min-width: 1024px)').matches) setShowPanel((v) => !v);
+    else setPanelSheet(true);
+  }
+  const pendingCount = props.panel.pending.length;
+  // The agent currently "holding" the task can't be a handoff target.
+  const holderId = lastReplyAgentId ?? agentId;
+  const handoffAgents = agents.filter((a) => a.id !== holderId);
 
   return (
     <div className="flex h-full min-h-0">
     <div className="flex h-full min-w-0 flex-1 flex-col">
       {/* Header: title + agent picker */}
-      <header className="flex flex-wrap items-center gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-        <h1 className="min-w-0 flex-1 truncate font-medium">{props.title}</h1>
-        <label className="flex items-center gap-2 text-sm">
+      <header className="space-y-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+        <div className="flex items-center gap-3">
+          <Link href="/chat" className="text-zinc-500 md:hidden" aria-label="All chats">←</Link>
+          <h1 className="min-w-0 flex-1 truncate font-medium" title={props.title}>{props.title}</h1>
+          <form
+            action={deleteConversation.bind(null, conversationId)}
+            onSubmit={(e) => {
+              if (!confirm('Delete this chat and its files?')) e.preventDefault();
+            }}
+          >
+            <button className="text-sm text-zinc-400 hover:text-red-600" title="Delete this chat">
+              Delete
+            </button>
+          </form>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+        <label className="flex min-w-0 flex-1 items-center gap-2 text-sm">
           <span className="text-zinc-500">Agent</span>
           <select
             value={agentId ?? ''}
             onChange={(e) => chooseAgent(e.target.value)}
             disabled={busy}
-            className="rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            className="min-w-0 max-w-full flex-1 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm sm:flex-none dark:border-zinc-700 dark:bg-zinc-900"
           >
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
@@ -158,7 +185,7 @@ export function ChatView(props: {
           </select>
         </label>
         <button
-          onClick={() => setHandoffTarget(agents.find((a) => a.id !== agentId)?.id ?? agentId)}
+          onClick={() => setHandoffTarget(handoffAgents[0]?.id ?? null)}
           disabled={busy || messages.length === 0}
           className="rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-900"
           title="Pass this task to another agent with a brief"
@@ -166,17 +193,18 @@ export function ChatView(props: {
           Hand off →
         </button>
         <button
-          onClick={() => setShowPanel((v) => !v)}
-          className="text-sm text-zinc-500 hover:underline"
+          onClick={toggleBrief}
+          className="rounded-lg px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
           aria-pressed={showPanel}
         >
-          {showPanel ? 'Hide brief' : 'Show brief'}
+          Task brief
+          {pendingCount > 0 && (
+            <span className="ml-1.5 rounded-full bg-amber-500 px-1.5 py-0.5 text-xs font-medium text-white" aria-label={`${pendingCount} waiting for approval`}>
+              {pendingCount}
+            </span>
+          )}
         </button>
-        <form action={deleteConversation.bind(null, conversationId)}>
-          <button className="text-sm text-zinc-400 hover:text-red-600" title="Delete this chat">
-            Delete
-          </button>
-        </form>
+        </div>
       </header>
 
       {/* Messages */}
@@ -266,6 +294,11 @@ export function ChatView(props: {
               Next reply will come from {selected.name}, using the brief you shared with it.
             </p>
           )}
+          {input.length > MAX_MESSAGE_CHARS * 0.9 && (
+            <p className="mb-2 text-xs text-amber-600">
+              {input.length.toLocaleString()} / {MAX_MESSAGE_CHARS.toLocaleString()} characters. For longer text, attach it as a file.
+            </p>
+          )}
           {(attachments.length > 0 || uploading > 0) && (
             <div className="mb-2 flex flex-wrap gap-2">
               {attachments.map((a) => (
@@ -313,6 +346,8 @@ export function ChatView(props: {
                 }
               }}
               rows={1}
+              maxLength={MAX_MESSAGE_CHARS}
+              aria-label="Message"
               placeholder={selected ? `Message ${selected.name}…` : 'Pick an agent first'}
               className="max-h-48 min-h-[40px] flex-1 resize-none bg-transparent px-1 py-2 text-[15px] outline-none"
             />
@@ -341,10 +376,22 @@ export function ChatView(props: {
         <TaskPanel conversationId={conversationId} data={props.panel} />
       </div>
     )}
+    {panelSheet && (
+      <div className="fixed inset-0 z-40 flex flex-col bg-zinc-50 lg:hidden dark:bg-zinc-900" role="dialog" aria-modal="true" aria-label="Task brief">
+        <div className="flex justify-end border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
+          <button onClick={() => setPanelSheet(false)} className="text-sm text-zinc-600 hover:underline dark:text-zinc-300">
+            Close ✕
+          </button>
+        </div>
+        <div className="min-h-0 flex-1">
+          <TaskPanel conversationId={conversationId} data={props.panel} />
+        </div>
+      </div>
+    )}
     {handoffTarget && (
       <HandoffDialog
         conversationId={conversationId}
-        agents={agents}
+        agents={handoffAgents}
         initialAgentId={handoffTarget}
         currentNextStep={props.panel.state.next_step}
         onClose={() => setHandoffTarget(null)}

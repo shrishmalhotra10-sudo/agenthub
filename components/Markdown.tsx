@@ -10,7 +10,7 @@ import remarkGfm from 'remark-gfm';
  */
 export function Markdown({ children }: { children: string }) {
   return (
-    <div className="prose prose-zinc max-w-none text-[15px] dark:prose-invert prose-pre:bg-zinc-900 prose-pre:text-zinc-100">
+    <div className="prose prose-zinc max-w-none text-[15px] dark:prose-invert prose-headings:font-semibold prose-h1:text-xl prose-h2:text-lg prose-h3:text-base prose-pre:bg-zinc-900 prose-pre:text-zinc-100">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

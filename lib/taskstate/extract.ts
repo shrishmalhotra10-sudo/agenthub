@@ -3,6 +3,7 @@ import { generateText, Output } from 'ai';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getModel, isProviderLive } from '@/lib/agents/providers';
 import { clean } from './render';
+import { stripHandoffPrefix } from '@/lib/agents/demo';
 import { taskPatchSchema, type TaskPatch, type TaskState } from './schema';
 import { applyAndRecord, getTaskState, insertPendingChange } from './store';
 
@@ -72,6 +73,18 @@ export async function updateTaskStateAfterTurn(
       });
     }
     patch = { ...emptyPatch(), add_progress: patch.add_progress, artifact: patch.artifact };
+  } else {
+    // Rule-based mode: "Decision: X — because Y" lines in a reply become suggestions to approve.
+    const proposed = parseDecisionLines(opts.replyText);
+    if (proposed.length) {
+      await insertPendingChange(supabase, {
+        conversationId: opts.conversationId,
+        userId: opts.userId,
+        agentId: opts.agentId,
+        source: 'extractor',
+        patch: { add_decisions: proposed },
+      });
+    }
   }
 
   // A deliverable gets saved in full as a versioned artifact; the brief keeps only its summary.
@@ -155,25 +168,43 @@ function emptyPatch(): TaskPatch {
   };
 }
 
+// Lines that are about the handoff itself, not the work.
+const META_LINE = /^(\*\*)?(picking up|you asked|what i (received|used)|here'?s a first draft|here is what|_?demo mode|key choices)/i;
+
+function meaningfulSentence(text: string): string {
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    const plain = line.replace(/^[\s*_>#-]+/, '').replace(/\*\*/g, '');
+    if (!line || /^#/.test(line) || META_LINE.test(plain) || /^(goal|decisions|resume|constraints|done so far|files|progress)\b/i.test(plain)) continue;
+    return clean(line.replace(/[*_`>#-]/g, ' '), 300).split(/(?<=[.!?])\s/)[0].slice(0, 160);
+  }
+  return '';
+}
+
+/** "**Decision:** what — because why" lines → decisions (max 5). */
+export function parseDecisionLines(text: string): { what: string; why: string }[] {
+  const out: { what: string; why: string }[] = [];
+  for (const raw of text.split('\n')) {
+    const m = /^decision\b\**:\**\s*(.+)$/i.exec(raw.replace(/^[\s*-]+/, ''));
+    if (!m) continue;
+    const [what, why = ''] = m[1].replace(/\*\*/g, '').split(/\s+[—–-]+\s+(?:because\s+)?/i);
+    if (what.trim()) out.push({ what: clean(what, 300).replace(/\.$/, ''), why: clean(why, 500).replace(/\.$/, '') });
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
 /** No AI key available: a simple rule-based update so the brief still fills in (demo mode). */
 function heuristicPatch(state: TaskState, opts: { agentName: string; userText: string; replyText: string }): TaskPatch {
-  const firstSentence = (t: string) => clean(t.replace(/[*#>_`]/g, ''), 400).split(/(?<=[.!?])\s/)[0].slice(0, 200);
+  const ask = stripHandoffPrefix(opts.userText);
+  const askSentence = clean(ask, 300).split(/(?<=[.!?])\s/)[0].slice(0, 120);
+  const heading = /^#\s+(.+)$/m.exec(opts.replyText)?.[1]?.trim();
+  const outcome = heading ? `Produced "${clean(heading, 100)}"` : meaningfulSentence(opts.replyText);
   return {
-    goal: state.goal ? null : clean(opts.userText, 300) || null,
-    tone: null,
-    format: null,
-    budget: null,
-    deadline: null,
-    add_must: null,
-    add_must_not: null,
-    add_decisions: null,
-    add_progress: [{ step: `${opts.agentName} handled: ${firstSentence(opts.userText) || 'the request'}`, outcome: firstSentence(opts.replyText) }],
-    open_questions: null,
-    next_step: null,
-    add_glossary: null,
-    artifact:
-      opts.replyText.length > 400
-        ? { title: `Output from ${opts.agentName}`, summary: firstSentence(opts.replyText) }
-        : null,
+    ...emptyPatch(),
+    // The goal comes only from the user's own words, never from an agent's reply.
+    goal: state.goal || !ask ? null : clean(ask, 400),
+    add_progress: [{ step: askSentence ? `${askSentence}` : `Took over the task`, outcome }],
+    artifact: heading ? { title: clean(heading, 120), summary: meaningfulSentence(opts.replyText.slice(opts.replyText.indexOf(heading) + heading.length)) || `Written by ${opts.agentName}` } : null,
   };
 }

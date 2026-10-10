@@ -70,3 +70,32 @@ select id,
   case slug when 'handoff-inspector' then 'http://localhost:3000/api/sample-agent' else null end
 from ins
 on conflict (agent_id) do nothing;
+
+-- More demo agents so every marketplace category has something.
+with ins as (
+  insert into public.agents (slug, name, description, category, kind, provider, model, manifest, is_published)
+  values
+    ('interview-coach', 'Interview Coach',
+     'Runs realistic mock interviews for the roles you are applying to, one question at a time, and gives specific feedback on each answer.',
+     'career', 'nocode', 'google', 'gemini-flash-latest', '{"needs": ["goal", "constraints", "decisions", "progress", "artifacts"]}', true),
+    ('brand-designer', 'Brand Designer',
+     'Turns a product idea into a brand direction: positioning line, colour palette, typography and logo concepts you can hand to a designer.',
+     'design', 'nocode', 'google', 'gemini-flash-latest', '{"needs": ["goal", "constraints", "decisions", "glossary"]}', true),
+    ('code-reviewer', 'Code Reviewer',
+     'Reviews code you paste or upload for bugs, security issues and readability, and explains each fix in plain language.',
+     'coding', 'nocode', 'anthropic', 'claude-sonnet-5-5', '{"needs": ["goal", "constraints", "artifacts"]}', true),
+    ('pitch-strategist', 'Pitch Strategist',
+     'Shapes your startup story into a clear investor pitch: problem, solution, market, traction and the ask, slide by slide.',
+     'business', 'nocode', 'openai', 'gpt-6-luna', '{"needs": ["goal", "constraints", "decisions", "progress", "artifacts", "glossary"]}', true)
+  on conflict (slug) do nothing
+  returning id, slug
+)
+insert into public.agent_configs (agent_id, system_prompt)
+select id, case slug
+  when 'interview-coach' then 'You are Interview Coach. Use the user''s target role, resume and earlier decisions to run a mock interview: ask one question at a time, wait for the answer, then give 2-3 concrete improvements. Never invent facts about the user.'
+  when 'brand-designer' then 'You are Brand Designer. Propose a brand direction: one-line positioning, 3-colour palette with hex codes, a type pairing, and 3 logo concepts described in words. Explain each choice in one sentence.'
+  when 'code-reviewer' then 'You are Code Reviewer. Review the code for correctness bugs first, then security, then readability. For each issue give the line, the problem, and a fixed snippet. Be concise.'
+  when 'pitch-strategist' then 'You are Pitch Strategist. Turn the user''s idea into a 10-slide investor narrative. Keep claims grounded in what the user said; flag missing numbers as open questions.'
+end
+from ins
+on conflict (agent_id) do nothing;

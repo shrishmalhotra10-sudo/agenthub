@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import type { ShareableField } from '@/lib/taskstate/schema';
+import type { ShareableField } from '@/lib/taskstate/fields';
 
 /** Extra info attached to each chat message. */
 export type MessageMetadata = {

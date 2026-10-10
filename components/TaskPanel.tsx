@@ -3,7 +3,8 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { decideChange, getArtifactContent, revokeConsent, saveTaskStateAction } from '@/app/chat/task-actions';
-import { FIELD_LABEL, type ShareableField, type TaskState } from '@/lib/taskstate/schema';
+import { FIELD_LABEL, type ShareableField } from '@/lib/taskstate/fields';
+import type { TaskState } from '@/lib/taskstate/schema';
 
 export type PanelData = {
   state: TaskState;
@@ -99,7 +100,7 @@ export function TaskPanel({ conversationId, data }: { conversationId: string; da
           <Section title="Waiting for your approval">
             {data.pending.map((c) => (
               <div key={c.id} className="rounded-lg border border-amber-300 bg-amber-50 p-2 dark:border-amber-800 dark:bg-amber-950">
-                <p className="font-medium">From {c.agentName}&apos;s reply: {c.summary}</p>
+                <p className="font-medium">{c.agentName} suggests adding: {c.summary}</p>
                 <PatchDetails patch={c.patch} />
                 <div className="mt-2 flex gap-2">
                   <button onClick={() => act(() => decideChange(conversationId, c.id, true))} className="rounded-md bg-zinc-900 px-2 py-0.5 text-xs text-white dark:bg-white dark:text-zinc-900">Approve</button>

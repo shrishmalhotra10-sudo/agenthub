@@ -23,8 +23,8 @@ export function LoginForm() {
 
     if (mode === 'signin') {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) setError(error.message);
-      else router.replace('/chat');
+      if (error) setError(/invalid login/i.test(error.message) ? 'Wrong email or password.' : error.message);
+      else router.replace('/marketplace');
     } else {
       // On your own machine, accounts are confirmed instantly (no email needed).
       const instant = await signUpInstant(email, password);

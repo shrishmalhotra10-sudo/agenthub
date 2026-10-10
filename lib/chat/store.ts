@@ -108,8 +108,10 @@ export async function loadPanelData(supabase: SupabaseClient, conversationId: st
         at: c.created_at,
         text:
           c.source === 'user'
-            ? c.summary
-            : `${c.source === 'extractor' ? `Brief updated after ${nameOf(c.agent_id)}` : `${nameOf(c.agent_id)}'s suggestion ${c.status}`}: ${c.summary}`,
+            ? c.summary.startsWith('You ') ? c.summary : `You set the ${c.summary}`
+            : c.source === 'extractor' && c.status === 'applied' && !(c.patch as { add_decisions?: unknown[] } | null)?.add_decisions?.length
+              ? `Brief updated after ${nameOf(c.agent_id)}: ${c.summary}`
+              : `You ${c.status === 'applied' ? 'approved' : 'rejected'} ${nameOf(c.agent_id)}'s suggestion: ${c.summary}`,
       })),
     ...(shares.data ?? []).map((s) => ({
       key: `s${s.id}`,

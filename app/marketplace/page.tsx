@@ -20,6 +20,9 @@ export default async function MarketplacePage({ searchParams }: { searchParams: 
   if (category) query = query.eq('category', category);
   if (q) query = query.or(`name.ilike.%${q}%,description.ilike.%${q}%`);
   const { data: agents } = await query;
+  // Only show category chips that actually have agents.
+  const { data: catRows } = await supabase.from('agents').select('category').eq('is_published', true);
+  const usedCategories = CATEGORIES.filter((c) => (catRows ?? []).some((r) => r.category === c));
 
   return (
     <div className="min-h-dvh bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
@@ -41,7 +44,7 @@ export default async function MarketplacePage({ searchParams }: { searchParams: 
 
         <nav className="mt-4 flex flex-wrap gap-2" aria-label="Categories">
           <Link href={q ? `/marketplace?q=${encodeURIComponent(q)}` : '/marketplace'} className={chip(!category)}>All</Link>
-          {CATEGORIES.map((c) => (
+          {usedCategories.map((c) => (
             <Link key={c} href={`/marketplace?category=${c}${q ? `&q=${encodeURIComponent(q)}` : ''}`} className={chip(category === c)}>
               {c[0].toUpperCase() + c.slice(1)}
             </Link>
@@ -68,7 +71,11 @@ export default async function MarketplacePage({ searchParams }: { searchParams: 
             </li>
           ))}
         </ul>
-        {!agents?.length && <p className="mt-6 text-sm text-zinc-500">No agents match. Try another search.</p>}
+        {!agents?.length && (
+          <p className="mt-6 text-sm text-zinc-500">
+            No agents match{q ? ` “${q}”` : ''}. <Link href="/marketplace" className="underline">Show all agents</Link>
+          </p>
+        )}
       </main>
     </div>
   );

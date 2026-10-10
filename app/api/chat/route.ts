@@ -14,6 +14,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getUser } from '@/lib/supabase/server';
 import { createAdminClient, MissingSecretKeyError } from '@/lib/supabase/admin';
 import { createDemoModel, getModel } from '@/lib/agents/providers';
+import { demoReply } from '@/lib/agents/demo';
 import { buildInstructions } from '@/lib/agents/prompt';
 import { callExternalAgent, type ExternalRequest } from '@/lib/agents/external';
 import { decryptSecret, opaqueTaskId } from '@/lib/crypto';
@@ -22,7 +23,7 @@ import { loadMessages } from '@/lib/chat/store';
 import { consumeQuota } from '@/lib/ratelimit';
 import { FILE_URL_RE, fileIdFromUrl, PROVIDER_LABEL, type AppUIMessage } from '@/lib/chat/types';
 import { briefForExternal, clean, fenceData, renderBrief } from '@/lib/taskstate/render';
-import { taskPatchSchema, type ShareableField, type TaskState } from '@/lib/taskstate/schema';
+import { taskPatchSchema } from '@/lib/taskstate/schema';
 import { getConsentedFields, getTaskState, insertPendingChange } from '@/lib/taskstate/store';
 import { updateTaskStateAfterTurn } from '@/lib/taskstate/extract';
 
@@ -74,7 +75,7 @@ export async function POST(req: Request) {
 
   const { data: agent } = await supabase
     .from('agents')
-    .select('id, name, kind, provider, model, creator_id')
+    .select('id, slug, name, kind, provider, model, creator_id')
     .eq('id', agentId)
     .maybeSingle();
   if (!agent) return text('That agent is not available.', 404);
@@ -219,13 +220,22 @@ export async function POST(req: Request) {
       first_turn_after_handoff: isHandoffTurn,
     };
 
+    const replyId = crypto.randomUUID();
     const stream = createUIMessageStream<AppUIMessage>({
       originalMessages: history,
-      generateId: () => crypto.randomUUID(),
+      generateId: () => replyId,
       execute: async ({ writer }) => {
-        writer.write({ type: 'start', messageMetadata: { agentId: agent.id } });
+        writer.write({ type: 'start', messageId: replyId, messageMetadata: { agentId: agent.id } });
         writer.write({ type: 'text-start', id: 'reply' });
-        const say = (delta: string) => writer.write({ type: 'text-delta', id: 'reply', delta });
+        let replyText = '';
+        const say = (delta: string) => {
+          replyText += delta;
+          try {
+            writer.write({ type: 'text-delta', id: 'reply', delta });
+          } catch {
+            // Browser went away; keep collecting so the reply is still saved.
+          }
+        };
         try {
           let wanted: string[] = [];
           let proposals = 0;
@@ -261,10 +271,7 @@ export async function POST(req: Request) {
           say(`\n\n⚠️ ${err instanceof Error ? err.message : 'This agent failed to respond.'}`);
         }
         writer.write({ type: 'text-end', id: 'reply' });
-      },
-      onEnd: async ({ responseMessage }) => {
-        const replyText = responseMessage.parts.map((p) => (p.type === 'text' ? p.text : '')).join('');
-        await finishTurn(responseMessage.id, replyText);
+        await finishTurn(replyId, replyText);
       },
     });
     return createUIMessageStreamResponse({ stream });
@@ -314,7 +321,7 @@ export async function POST(req: Request) {
   const model =
     realModel ??
     (await createDemoModel(
-      demoReply({ agentName: agent.name, provider: agent.provider, userText, previousAgentName: isHandoffTurn ? previousAgentName : null, state, fields }),
+      demoReply({ agentSlug: agent.slug, agentName: agent.name, provider: agent.provider, userText, previousAgentName: isHandoffTurn ? previousAgentName : null, state, fields }),
     ));
 
   let proposalsThisTurn = 0;
@@ -352,6 +359,7 @@ export async function POST(req: Request) {
       }
     : undefined;
 
+  const replyId = crypto.randomUUID();
   const result = streamText({
     model,
     instructions,
@@ -359,6 +367,14 @@ export async function POST(req: Request) {
     tools,
     stopWhen: isStepCount(4),
     maxOutputTokens: 4000,
+    abortSignal: AbortSignal.timeout(85_000), // stay inside the 90s route limit
+    onError: ({ error }) => logModelError(error), // replaces the SDK's default (verbose) logging
+    // Runs on the server when generation finishes, even if the user closed the tab or refreshed.
+    onEnd: async (event) => {
+      const steps = (event as { steps?: { text: string }[] }).steps;
+      const replyText = steps?.length ? steps.map((s) => s.text).filter(Boolean).join('\n\n') : event.text;
+      await finishTurn(replyId, replyText);
+    },
   });
   // Keep generating (and saving) even if the user closes the tab mid-reply.
   result.consumeStream();
@@ -367,15 +383,20 @@ export async function POST(req: Request) {
     stream: toUIMessageStream({
       stream: result.stream,
       originalMessages: history,
-      generateMessageId: () => crypto.randomUUID(),
+      generateMessageId: () => replyId,
       messageMetadata: ({ part }) => (part.type === 'start' ? { agentId: agent.id } : undefined),
       onError: (error) => friendlyError(error, agent.provider),
-      onEnd: async ({ responseMessage }) => {
-        const replyText = responseMessage.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n\n');
-        await finishTurn(responseMessage.id, replyText);
-      },
     }),
   });
+}
+
+/** Logs provider errors without the request body (which contains the user's conversation). */
+function logModelError(error: unknown) {
+  if (APICallError.isInstance(error)) {
+    console.error('[chat] model error', { status: error.statusCode, url: error.url, message: error.message.slice(0, 200) });
+  } else {
+    console.error('[chat] model error', error instanceof Error ? error.message.slice(0, 200) : 'unknown error');
+  }
 }
 
 /** An agent's suggested change to the Task State. Never applied until the user approves it. */
@@ -390,7 +411,7 @@ async function proposeChange(
 
 /** Turn provider errors into something a user can act on, without leaking internals. */
 function friendlyError(error: unknown, provider: string | null): string {
-  console.error('[chat] model error', error);
+  // (Already logged once by streamText's onError.)
   const name = PROVIDER_LABEL[provider ?? ''] ?? 'The provider';
   if (APICallError.isInstance(error)) {
     if (error.statusCode === 401 || error.statusCode === 403) return `${name} rejected the API key.`;
@@ -398,51 +419,4 @@ function friendlyError(error: unknown, provider: string | null): string {
     if (error.statusCode === 429) return `${name} is rate-limiting requests. Try again shortly.`;
   }
   return `Something went wrong while ${name} was replying. Please try again.`;
-}
-
-/** Demo mode reply. On a handoff it shows exactly what the agent received, to prove the brief works. */
-function demoReply(o: {
-  agentName: string;
-  provider: string | null;
-  userText: string;
-  previousAgentName: string | null;
-  state: TaskState;
-  fields: ShareableField[];
-}): string {
-  const providerName = PROVIDER_LABEL[o.provider ?? ''] ?? 'this provider';
-  const has = (f: ShareableField) => o.fields.includes(f);
-  const lines: string[] = [];
-
-  if (o.previousAgentName) {
-    const last = has('progress') ? o.state.progress.at(-1) : undefined;
-    const next = (has('open_questions') && o.state.next_step) || o.userText || 'continue the task';
-    lines.push(
-      `**Picking up from ${o.previousAgentName}**${last ? ` (last step: ${clean(last.step, 120).replace(/\.+$/, '')})` : ''}, next I'll work on: "${clean(next, 160).replace(/\.+$/, '')}".`,
-      '',
-    );
-  }
-
-  if (o.fields.length) {
-    lines.push('Here is what I received in the handoff brief:', '');
-    if (has('goal')) lines.push(`- **Goal:** ${clean(o.state.goal, 200) || '—'}`);
-    if (has('constraints')) {
-      const c = o.state.constraints;
-      const items = [c.tone && `tone: ${c.tone}`, c.format && `format: ${c.format}`, c.deadline && `deadline: ${c.deadline}`, ...c.must.map((m) => `must: ${m}`), ...c.must_not.map((m) => `must not: ${m}`)].filter(Boolean);
-      lines.push(`- **Constraints:** ${items.length ? clean(items.join('; '), 300) : '—'}`);
-    }
-    if (has('decisions')) {
-      lines.push(`- **Decisions I'll keep:** ${o.state.decisions.length ? o.state.decisions.map((d) => clean(`${d.what}${d.why ? ` (because ${d.why})` : ''}`, 160)).join('; ') : '—'}`);
-    }
-    if (has('progress')) lines.push(`- **Done so far:** ${o.state.progress.length ? o.state.progress.map((p) => clean(p.step, 100)).join('; ') : '—'}`);
-    if (has('artifacts')) lines.push(`- **Files & outputs:** ${o.state.artifacts.length ? o.state.artifacts.map((a) => `${clean(a.title, 80)} v${a.version}`).join(', ') : '—'}`);
-    lines.push('');
-  } else if (o.previousAgentName) {
-    lines.push("You didn't share the task brief with me, so I only see your latest messages.", '');
-  }
-
-  if (!o.previousAgentName && o.userText) {
-    lines.push(`You said: "${clean(o.userText, 200)}"`, '');
-  }
-  lines.push(`_Demo reply from ${o.agentName}: no ${providerName} API key is set, so this isn't a real answer._`);
-  return lines.join('\n');
 }

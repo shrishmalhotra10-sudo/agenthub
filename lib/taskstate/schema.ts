@@ -63,29 +63,8 @@ function trimLists(raw: unknown): unknown {
   return s;
 }
 
-/** The parts of a Task State an agent can be given. `chat_history` = earlier raw transcript. */
-export const SHAREABLE_FIELDS = [
-  'goal',
-  'constraints',
-  'decisions',
-  'progress',
-  'artifacts',
-  'open_questions',
-  'glossary',
-  'chat_history',
-] as const;
-export type ShareableField = (typeof SHAREABLE_FIELDS)[number];
-
-export const FIELD_LABEL: Record<ShareableField, string> = {
-  goal: 'Goal',
-  constraints: 'Constraints & preferences',
-  decisions: 'Decisions (and why)',
-  progress: 'Progress so far',
-  artifacts: 'Files & outputs',
-  open_questions: 'Open questions & next step',
-  glossary: 'Glossary',
-  chat_history: 'Full earlier chat transcript',
-};
+export { SHAREABLE_FIELDS, FIELD_LABEL, type ShareableField } from './fields';
+import { SHAREABLE_FIELDS, type ShareableField } from './fields';
 
 export const fieldsSchema = z.array(z.enum(SHAREABLE_FIELDS)).max(SHAREABLE_FIELDS.length);
 
@@ -163,18 +142,19 @@ export function applyPatch(state: TaskState, patch: Partial<TaskPatch>, by: stri
   return normalizeTaskState(next);
 }
 
-/** One-line human summary of a patch, for the change history. */
+/** One-line human summary of a patch, for the change history ("goal, 2 decisions, next step"). */
 export function describePatch(patch: Partial<TaskPatch>): string {
+  const n = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
   const bits: string[] = [];
   if (patch.goal) bits.push('goal');
   if (patch.tone || patch.format || patch.budget || patch.deadline || patch.add_must?.length || patch.add_must_not?.length) {
     bits.push('constraints');
   }
-  if (patch.add_decisions?.length) bits.push(`${patch.add_decisions.length} decision(s)`);
-  if (patch.add_progress?.length) bits.push(`${patch.add_progress.length} progress step(s)`);
+  if (patch.add_decisions?.length) bits.push(n(patch.add_decisions.length, 'decision'));
+  if (patch.add_progress?.length) bits.push(n(patch.add_progress.length, 'progress step'));
   if (patch.open_questions) bits.push('open questions');
   if (patch.next_step) bits.push('next step');
   if (patch.add_glossary?.length) bits.push('glossary');
   if (patch.artifact) bits.push(`output "${patch.artifact.title}"`);
-  return bits.length ? `Updated ${bits.join(', ')}` : 'No changes';
+  return bits.length ? bits.join(', ') : 'no changes';
 }

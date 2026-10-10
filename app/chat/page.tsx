@@ -1,4 +1,6 @@
+import Link from 'next/link';
 import { createConversation } from './actions';
+import { SubmitButton } from '@/components/SubmitButton';
 
 export default function ChatHome() {
   return (
@@ -9,10 +11,11 @@ export default function ChatHome() {
         came before.
       </p>
       <form action={createConversation}>
-        <button className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white dark:bg-white dark:text-zinc-900">
+        <SubmitButton pendingText="Starting…" className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white dark:bg-white dark:text-zinc-900">
           Start a new chat
-        </button>
+        </SubmitButton>
       </form>
+      <Link href="/marketplace" className="text-sm text-zinc-500 hover:underline">or browse the marketplace →</Link>
     </div>
   );
 }

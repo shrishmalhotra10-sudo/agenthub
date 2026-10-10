@@ -23,7 +23,9 @@ export async function deleteConversation(id: string) {
   const { supabase, user } = await getUser();
   if (!user) redirect('/login');
   // RLS makes this a no-op for anyone else's conversation.
-  // Uploaded file rows go with it (cascade); storage objects are cleaned up in a later phase.
+  // Remove the chat's uploaded files from storage too (their DB rows go with the chat via cascade).
+  const { data: files } = await supabase.from('files').select('storage_path').eq('conversation_id', parsed.data);
+  if (files?.length) await supabase.storage.from('uploads').remove(files.map((f) => f.storage_path));
   await supabase.from('conversations').delete().eq('id', parsed.data);
   revalidatePath('/chat', 'layout');
   redirect('/chat');

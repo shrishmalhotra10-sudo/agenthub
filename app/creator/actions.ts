@@ -31,11 +31,27 @@ const formSchema = z
     if (v.kind === 'external' && !v.endpoint_url) ctx.addIssue({ code: 'custom', message: 'Enter your endpoint URL.' });
   });
 
-export type SaveState = { error?: string };
+/** On error we send back what the user typed (never the API key) so the form isn't wiped. */
+export type SaveState = { error?: string; values?: Record<string, unknown>; attempt?: number };
 
 export async function saveAgent(_prev: SaveState, formData: FormData): Promise<SaveState> {
   const { supabase, user } = await getUser();
   if (!user) redirect('/login');
+
+  const echo = {
+    name: String(formData.get('name') ?? ''),
+    slug: String(formData.get('slug') ?? ''),
+    description: String(formData.get('description') ?? ''),
+    category: String(formData.get('category') ?? 'general'),
+    kind: formData.get('kind') === 'external' ? 'external' : 'nocode',
+    provider: String(formData.get('provider') ?? 'openai'),
+    model: String(formData.get('model') ?? ''),
+    system_prompt: String(formData.get('system_prompt') ?? ''),
+    endpoint_url: String(formData.get('endpoint_url') ?? ''),
+    needs: formData.getAll('needs').map(String),
+    is_published: formData.get('is_published') === 'on',
+  };
+  const fail = (error: string): SaveState => ({ error, values: echo, attempt: Date.now() });
 
   const parsed = formSchema.safeParse({
     id: formData.get('id') || undefined,
@@ -52,12 +68,12 @@ export async function saveAgent(_prev: SaveState, formData: FormData): Promise<S
     needs: formData.getAll('needs'),
     is_published: formData.get('is_published') === 'on',
   });
-  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Please check the form.' };
+  if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? 'Please check the form.');
   const v = parsed.data;
 
   if (v.kind === 'external') {
     const problem = await checkEndpoint(v.endpoint_url!);
-    if (problem) return { error: problem };
+    if (problem) return fail(problem);
   }
 
   const row = {
@@ -75,15 +91,15 @@ export async function saveAgent(_prev: SaveState, formData: FormData): Promise<S
 
   if (!v.id) {
     const { count } = await supabase.from('agents').select('id', { count: 'exact', head: true }).eq('creator_id', user.id);
-    if ((count ?? 0) >= 20) return { error: 'You can have up to 20 agents for now.' };
+    if ((count ?? 0) >= 20) return fail('You can have up to 20 agents for now.');
   }
 
   // RLS: creators can only insert/update agents where creator_id is themselves.
   const result = v.id
     ? await supabase.from('agents').update(row).eq('id', v.id).eq('creator_id', user.id).select('id').maybeSingle()
     : await supabase.from('agents').insert({ ...row, creator_id: user.id }).select('id').single();
-  if (result.error?.code === '23505') return { error: 'That web address is taken. Try another.' };
-  if (result.error || !result.data) return { error: 'Could not save the agent.' };
+  if (result.error?.code === '23505') return fail('That web address is taken. Try another.');
+  if (result.error || !result.data) return fail('Could not save the agent.');
   const agentId = result.data.id;
 
   const { error: configError } = await supabase.from('agent_configs').upsert({
@@ -92,7 +108,7 @@ export async function saveAgent(_prev: SaveState, formData: FormData): Promise<S
     endpoint_url: v.kind === 'external' ? v.endpoint_url : null,
     updated_at: new Date().toISOString(),
   });
-  if (configError) return { error: 'Saved the agent, but not its settings. Please try again.' };
+  if (configError) return fail('Saved the agent, but not its settings. Please try again.');
 
   // The creator's API key: encrypted, stored where no browser can read it. Blank = keep existing.
   if (v.kind === 'nocode' && v.api_key) {
@@ -100,9 +116,9 @@ export async function saveAgent(_prev: SaveState, formData: FormData): Promise<S
       const { error } = await createAdminClient()
         .from('agent_secrets')
         .upsert({ agent_id: agentId, api_key_encrypted: encryptSecret(v.api_key), updated_at: new Date().toISOString() });
-      if (error) return { error: 'Saved the agent, but not the API key.' };
+      if (error) return fail('Saved the agent, but not the API key.');
     } catch {
-      return { error: 'Server setup incomplete (secret or encryption key missing), so the API key was not saved.' };
+      return fail('Server setup incomplete (secret or encryption key missing), so the API key was not saved.');
     }
   }
 

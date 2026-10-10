@@ -50,6 +50,8 @@ export async function applyAndRecord(
     agentId?: string | null;
     /** Extra mutation after the patch (e.g. adding an artifact entry). */
     mutate?: (state: TaskState) => TaskState;
+    /** Human summary for the history; defaults to a description of the patch. */
+    summary?: string;
   },
 ): Promise<TaskState | null> {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -63,7 +65,7 @@ export async function applyAndRecord(
         user_id: opts.userId,
         source: opts.source,
         agent_id: opts.agentId ?? null,
-        summary: describePatch(opts.patch).slice(0, 300),
+        summary: (opts.summary ?? describePatch(opts.patch)).slice(0, 300),
         patch: opts.patch,
         status: 'applied',
       });

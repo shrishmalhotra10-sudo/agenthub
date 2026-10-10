@@ -5,7 +5,7 @@
 // then deletes both users and their files.
 import { createClient } from '@supabase/supabase-js';
 import { createServerClient } from '@supabase/ssr';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 process.loadEnvFile('.env.local');
@@ -190,7 +190,7 @@ try {
   // Make the job agent "new" to the task again by having the resume agent reply in between.
   await chat(a, { conversationId: task.id, agentId: resume.id, message: userMsg('Thanks, looks good.') });
   await new Promise((r) => setTimeout(r, 1000));
-  const handoff = await chat(a, { conversationId: task.id, agentId: jobs.id, message: userMsg('Handing off. Write a cover letter for Acme.') });
+  const handoff = await chat(a, { conversationId: task.id, agentId: jobs.id, message: userMsg('Handing off to Job Application Assistant. Next: write a cover letter for the Acme senior PM role') });
   console.log('      ↳', handoff.text.slice(0, 300).replace(/\n/g, ' '));
   check(/Picking up from Resume Builder/i.test(handoff.text), 'next agent confirms what it is picking up');
   check(/product manager/i.test(handoff.text) && /not an engineer/i.test(handoff.text), "next agent knows the goal and the user's decision without being told");
@@ -234,7 +234,7 @@ try {
   await new Promise((r) => setTimeout(r, 1200));
 
   await a.client.from('consents').insert({ conversation_id: blog.id, user_id: a.id, agent_id: writer.id, fields: ALL });
-  const b2 = await chat(a, { conversationId: blog.id, agentId: writer.id, message: userMsg('Handing off. Write the draft.') });
+  const b2 = await chat(a, { conversationId: blog.id, agentId: writer.id, message: userMsg('Handing off to Draft Writer. Next: write the draft') });
   check(/Picking up from Research Scout/.test(b2.text), 'step 2: Draft Writer (Claude) picks up from Research Scout');
   await new Promise((r) => setTimeout(r, 1200));
 
@@ -246,7 +246,7 @@ try {
   }).eq('conversation_id', blog.id);
 
   await a.client.from('consents').insert({ conversation_id: blog.id, user_id: a.id, agent_id: editor.id, fields: ALL });
-  const b3 = await chat(a, { conversationId: blog.id, agentId: editor.id, message: userMsg('Handing off. Edit it.') });
+  const b3 = await chat(a, { conversationId: blog.id, agentId: editor.id, message: userMsg('Handing off to Sharp Editor. Next: tighten the draft for clarity') });
   console.log('      ↳', b3.text.slice(0, 500).replace(/\n/g, ' '));
   check(/Picking up from Draft Writer/.test(b3.text), 'step 3: Sharp Editor (OpenAI) picks up from Draft Writer');
   check(/remote teams/i.test(b3.text), 'editor knows the original goal without being told');
@@ -275,6 +275,51 @@ try {
   const { data: creatorChats } = await a.client.from('messages').select('id').eq('conversation_id', task.id).neq('user_id', a.id);
   check(!creatorChats?.length, "creators have no access to other users' chats");
   await admin.from('agents').delete().eq('id', mine.id);
+
+  // ───── Robustness (as user B, who has a fresh rate-limit budget) ─────
+  const { data: bConv } = await b.client.from('conversations').insert({ user_id: b.id }).select('id').single();
+  const tooLong = await chat(b, { conversationId: bConv.id, agentId: research.id, message: userMsg('x'.repeat(20_001)) });
+  check(tooLong.status === 400, 'messages over 20,000 characters are refused cleanly');
+
+  // Closing the tab / refreshing mid-reply: the reply still finishes and is saved.
+  const ctrl = new AbortController();
+  const aborted = await fetch(`${BASE}/api/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: b.cookie },
+    body: JSON.stringify({ conversationId: bConv.id, agentId: research.id, message: userMsg('Research remote work trends.') }),
+    signal: ctrl.signal,
+  });
+  const reader = aborted.body.getReader();
+  await reader.read(); // first chunk arrived…
+  ctrl.abort(); // …then the user leaves
+  await new Promise((r) => setTimeout(r, 3000));
+  const { data: afterAbort } = await b.client.from('messages').select('role').eq('conversation_id', bConv.id);
+  check(afterAbort?.filter((m) => m.role === 'assistant').length === 1, 'reply is still saved if the user refreshes mid-stream');
+
+  // Provider rejects a creator's API key → user sees a clear message, not a crash.
+  const { data: badAgent } = await b.client
+    .from('agents')
+    .insert({ slug: `smoke-badkey-${Date.now()}`, name: 'Bad Key Agent', category: 'general', kind: 'nocode', provider: 'openai', model: 'gpt-6-luna', creator_id: b.id, is_published: false })
+    .select('id')
+    .single();
+  await b.client.from('agent_configs').insert({ agent_id: badAgent.id, system_prompt: 'test' });
+  const encKey = Buffer.from(process.env.AGENTHUB_ENCRYPTION_KEY, 'base64');
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', encKey, iv);
+  const enc = Buffer.concat([cipher.update('sk-invalid-qa-key', 'utf8'), cipher.final()]);
+  await admin.from('agent_secrets').insert({ agent_id: badAgent.id, api_key_encrypted: ['v1', iv.toString('base64'), cipher.getAuthTag().toString('base64'), enc.toString('base64')].join('.') });
+  const badKey = await chat(b, { conversationId: bConv.id, agentId: badAgent.id, message: userMsg('hello') });
+  console.log('      ↳', badKey.text.slice(0, 120));
+  check(/rejected the API key/i.test(badKey.text), 'a bad provider key shows a clear error to the user');
+  await admin.from('agents').delete().eq('id', badAgent.id);
+
+  // Rapid-fire messages hit the per-minute limit with a friendly message.
+  let limitedRes = null;
+  for (let i = 0; i < 16 && !limitedRes; i++) {
+    const r = await chat(b, { conversationId: bConv.id, agentId: research.id, message: userMsg(`ping ${i}`) });
+    if (r.status === 429) limitedRes = r;
+  }
+  check(limitedRes && /limit/i.test(limitedRes.text), 'rapid messages are rate-limited with a clear message');
 
   const anon = await fetch(`${BASE}${code.json.url}`);
   check(anon.status === 401, 'signed-out visitors cannot download files');

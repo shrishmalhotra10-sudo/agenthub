@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react';
 import { confirmHandoff, previewHandoff } from '@/app/chat/task-actions';
-import { FIELD_LABEL, SHAREABLE_FIELDS, type ShareableField } from '@/lib/taskstate/schema';
+import { FIELD_LABEL, SHAREABLE_FIELDS, type ShareableField } from '@/lib/taskstate/fields';
 import { PROVIDER_LABEL, type PublicAgent } from '@/lib/chat/types';
 
 export function HandoffDialog(props: {
@@ -11,7 +11,7 @@ export function HandoffDialog(props: {
   initialAgentId: string;
   currentNextStep: string;
   onClose: () => void;
-  onConfirmed: (agentId: string) => void;
+  onConfirmed: (agentId: string, nextStep: string) => void;
 }) {
   const [agentId, setAgentId] = useState(props.initialAgentId);
   const agent = props.agents.find((a) => a.id === agentId);
@@ -37,6 +37,14 @@ export function HandoffDialog(props: {
     };
   }, [props.conversationId, agentId, fields]);
 
+  // Escape closes the dialog.
+  const { onClose } = props;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   function toggle(field: ShareableField) {
     setFields((prev) => (prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field]));
   }
@@ -46,7 +54,7 @@ export function HandoffDialog(props: {
     startTransition(async () => {
       try {
         await confirmHandoff(props.conversationId, agentId, fields, nextStep);
-        props.onConfirmed(agentId);
+        props.onConfirmed(agentId, nextStep);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Handoff failed.');
       }
